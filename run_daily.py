@@ -798,3 +798,84 @@ def append_matchups(matchup_df):
 
     return
 
+def scrape_results():
+
+    matchup_df_results = pd.read_csv('tennis_matchup_data.csv', index_col = 0)
+    drop_indices = []
+    today = dt.today()
+
+    for index, row in matchup_df_results.iterrows():
+        
+        # Skipping rows with today's matches
+        date = dt.strptime(row.date, "%B %d, %Y")
+        date_diff = date - today
+        if (date_diff.days <= 0) & (date_diff.days > -2):
+            continue
+            
+        if row.result == -2:
+            
+            try:
+                # Getting results table for player 1
+                link = f'https://www.tennislive.net/atp/{row.player_1.split()[0]}-{row.player_1.split()[1]}'
+                tables = pd.read_html(link)
+                results_table = tables[2]
+                results_table = results_table.iloc[:, [0, 2, 3]]
+                results_table.columns = ['Date', 'Winner', 'Loser']
+                results_table['Date'] = results_table.Date.apply(lambda x: dt.strptime(x, "%d.%m.%y"))
+                # Finding correct result based on opponent name similarity and match date
+                results_table['Name_Similarity'] = results_table.apply(lambda x: fuzz.ratio(x.Winner, row.player_2) if 
+                                                                    fuzz.ratio(x.Winner, row.player_1) < 80 else
+                                                                    fuzz.ratio(x.Loser, row.player_2), axis = 1)
+        # Case where player 1 name doesn't translate to a correct link
+            except:
+                try:
+                    link = f'https://www.tennislive.net/atp/{row.player_2.split()[0]}-{row.player_2.split()[1]}'
+                    tables = pd.read_html(link)
+                    results_table = tables[2]
+                    results_table = results_table.iloc[:, [0, 2, 3]]
+                    results_table.columns = ['Date', 'Winner', 'Loser']
+                    results_table['Date'] = results_table.Date.apply(lambda x: dt.strptime(x, "%d.%m.%y"))
+                    # Finding correct result based on opponent name similarity and match date
+                    results_table['Name_Similarity'] = results_table.apply(lambda x: fuzz.ratio(x.Winner, row.player_1) if 
+                                                                        fuzz.ratio(x.Winner, row.player_2) < 80 else
+                                                                        fuzz.ratio(x.Loser, row.player_1), axis = 1)
+                # Deleting rows where can't get either link
+                except:
+                    drop_indices.append(index)
+                    continue
+
+            # Getting correct match
+            correct_match = results_table[results_table.Name_Similarity > 80]
+            # Deleting scraped data where no matchup exists
+            if len(correct_match) == 0:
+                drop_indices.append(index)
+                continue
+            if len(correct_match) != 1:
+                match_date = dt.strptime(row.date, "%B %d, %Y")
+                correct_match['DATE_DIFF'] = (match_date - correct_match.Date)
+                correct_match['DATE_DIFF'] = correct_match['DATE_DIFF'].apply(lambda x: x.days)
+                correct_match = correct_match[abs(correct_match.DATE_DIFF) < 3]
+            try:
+                winner_similarity = fuzz.ratio(row.player_1, correct_match.iloc[0, 1])
+            except:
+                drop_indices.append(index)
+                continue
+            # Determining if player 1 won
+            if winner_similarity > 80:
+                matchup_df_results.loc[index, 'result'] = 1
+            else:
+                matchup_df_results.loc[index, 'result'] = 0
+        else:
+            pass
+
+    matchup_df_results = matchup_df_results.drop(drop_indices).reset_index(drop = True)
+    matchup_df_results.to_csv('tennis_matchup_data.csv')
+    
+    return
+
+########## SCRIPT ##########
+
+today_matchups = scrape_matchups()
+append_matchups(today_matchups)
+
+scrape_results()
